@@ -18,6 +18,8 @@ void help(){
   printf( "  -d, --rtu-dev       tty used bu RTU  ( default = %s )\n", DEF_RTU_DEV );
   printf( "  -r, --rtu-addr      RTU Address number ( default = %d )\n", DEF_RTU_ADDR );
   printf( "  -s, --rtu-speed     RTU serial speed ( default = %d )\n", DEF_RTU_SPEED );
+  printf( "  -e, --error-rate    Modbus Errors Rate in percent [0.0 - 100.0] ( default = %f )\n", DEF_ERR_RATE );
+  printf( "  -i, --init-value    Modbus Errors Rate in percent [0x0 - 0xFF] ( default = %02X )\n", DEF_INIT_VAL );
 
   printf( "\nCommon:\n" );
   printf( "  -l, --level         Sets verbosity level [ error, warning, info, verbose, debug, none ] ( default = %s )\n", DEF_LEVEL_STR );
@@ -30,8 +32,6 @@ void help(){
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~ MAIN
 int main( const int argc, const char** argv ){
-  int phelp = 0;
-
   const char *tcp_addr = NULL,
              *port     = NULL,    // tcp_pi uses string port/service
              *rtu_dev  = NULL;    // tty path of RTU
@@ -39,6 +39,9 @@ int main( const int argc, const char** argv ){
       rtu_speed   = 0,
       rtu_enabled = 0,
       tcp_enabled = 0;
+
+  uint8_t init_value = DEF_INIT_VAL;
+  float error_rate = DEF_ERR_RATE;
 
   struct tcp_args_t tcp_args = { 0 };
   struct rtu_args_t rtu_args = { 0 };
@@ -48,7 +51,7 @@ int main( const int argc, const char** argv ){
 
   // BEGIN: Command line args
   for( int i = 1; i < argc; i++ ){
-    if(      strcmp( argv[i], "-h"  ) == 0 || strcmp( argv[i], "--help"        ) == 0 ){ phelp = 1;           }
+    if(      strcmp( argv[i], "-h"  ) == 0 || strcmp( argv[i], "--help"        ) == 0 ){ help(); return 0; }
     else if( strcmp( argv[i], "-c"  ) == 0 || strcmp( argv[i], "--colors"      ) == 0 ){ set_msg_colors( 1 ); }
     else if( strcmp( argv[i], "rtu" ) == 0 ){ rtu_enabled = 1; }
     else if( strcmp( argv[i], "tcp" ) == 0 ){ tcp_enabled = 1; }
@@ -72,6 +75,16 @@ int main( const int argc, const char** argv ){
       i++;
       rtu_speed = atoi( argv[i] );
     }
+    else if( (strcmp( argv[i], "-e" ) == 0 || strcmp( argv[i], "--error-rate" ) == 0 ) && (i+1)<argc && atof(argv[i+1]) >= 0.0 ){
+      i++;
+      error_rate = atof( argv[i] );
+      if (error_rate < 0.0 || error_rate > 100.0) { error_rate = DEF_ERR_RATE; }
+    }
+    else if( (strcmp( argv[i], "-i" ) == 0 || strcmp( argv[i], "--init-value" ) == 0 ) && (i+1)<argc && strtol(argv[i+1], NULL, 0) >= 0 ){
+      i++;
+      long tmp_val = strtol(argv[i], NULL, 0);
+      if (tmp_val >= 0x0 && tmp_val <= 0xFF) { init_value = tmp_val & 0xFF; }
+    }
     else if( (strcmp( argv[i], "-l" ) == 0 || strcmp( argv[i], "--level"      ) == 0 ) && (i+1)<argc ){
       i++;
       if(       strcmp( argv[i], "error"   ) == 0 ){ set_debug( DBG_ERR   ); }
@@ -81,17 +94,13 @@ int main( const int argc, const char** argv ){
       else if(  strcmp( argv[i], "debug"   ) == 0 ){ set_debug( DBG_DBG   ); }
       else if(  strcmp( argv[i], "none"    ) == 0 ){ set_debug( DBG_NONE  ); }
     }
-    else{ log_war( "Unknown argument: '%s'", argv[i] ); }
+    else{ log_war( "Unknown or invalid argument: '%s'", argv[i] ); }
   }
 
   // GWC std debug compatibility: overrides setted debug level
   if( getenv( "VERBOSE" ) ){ set_debug( DBG_DBG ); }
 
   // Check params
-  if( phelp ){
-    help();
-    return EXIT_SUCCESS;
-  }
   if( !tcp_addr ){
     tcp_addr = DEF_TCP_ADDR;
   }
@@ -117,6 +126,10 @@ int main( const int argc, const char** argv ){
   rtu_args.dev     = (char *)rtu_dev;
   tcp_args.addr    = (char *)tcp_addr;
 
+  tcp_args.init_value = init_value;
+  rtu_args.init_value = init_value;
+  tcp_args.error_rate = error_rate;
+  rtu_args.error_rate = error_rate;
 
   // Debug printing used vars
   if( get_debug() <= DBG_DBG ){
@@ -131,9 +144,13 @@ int main( const int argc, const char** argv ){
     }
     log_dbg( "├─ tcp_args.addr:       %s", tcp_args.addr      );
     log_dbg( "├─ tcp_args.port:       %s", tcp_args.port      );
+    log_dbg( "├─ tcp_args.init_value: %d", tcp_args.init_value);
+    log_dbg( "├─ tcp_args.error_rate: %f", tcp_args.error_rate);
     log_dbg( "├─ rtu_args.dev:        %s", rtu_args.dev       );
     log_dbg( "├─ rtu_args.addr:       %d", rtu_args.addr      );
     log_dbg( "├─ rtu_args.speed:      %d", rtu_args.speed     );
+    log_dbg( "├─ rtu_args.init_value: %d", rtu_args.init_value);
+    log_dbg( "├─ rtu_args.error_rate: %f", rtu_args.error_rate);
     log_dbg( "├─────" );
     log_dbg( "├─ dbgl:                %d", get_debug() );
     log_dbg( "├─ colors:              %s", is_msg_colors() ? ( COL_BRIGHT_GREEN "on" COL_RESET ) : "off" );
@@ -152,11 +169,6 @@ int main( const int argc, const char** argv ){
   // ========================================
   while( 1 ){ /** @todo Add support for signals */
     usleep( STATUS_SLEEP * 1000000 );
-
-    // Checking if is time to suicide
-    if( 0 ){
-      break;
-    }
 
     /** @todo add some logic here. Implemented this way to give the possibility to do something while the server is running */
   }

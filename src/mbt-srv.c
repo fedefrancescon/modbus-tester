@@ -115,12 +115,20 @@ void mbtcp_runner( struct tcp_args_t *args ){
   fd_set refset, rdset;
 
   modbus_t *ctx_tcp = NULL;
-  uint8_t query[ MODBUS_TCP_MAX_ADU_LENGTH ];
+  uint8_t query[ MODBUS_TCP_MAX_ADU_LENGTH ] = { 0 };
   modbus_mapping_t *mb_mapping = modbus_mapping_new( MB_BITS_MAX, MB_BITS_IN_MAX, MB_REGS_MAX, MB_REGS_IN_MAX );
   if( !mb_mapping ){
     log_err( "Failed to allocate mapping with err( %d ): %s", errno, modbus_strerror(errno) );
     pthread_exit( NULL );
   }
+
+  // Initializing registry values
+  memset(mb_mapping->tab_bits,            args->init_value, MB_BITS_MAX);
+  memset(mb_mapping->tab_input_bits,      args->init_value, MB_BITS_IN_MAX);
+  memset(mb_mapping->tab_registers,       args->init_value, MB_REGS_MAX);
+  memset(mb_mapping->tab_input_registers, args->init_value, MB_REGS_IN_MAX);
+
+  uint64_t tot_req = 0;
 
   while( !srv_terminate ){
     // Setting up context
@@ -200,15 +208,18 @@ void mbtcp_runner( struct tcp_args_t *args ){
           continue;
         }
 
-        int err = mb_query( query, rc, MDB_PROTO_TCP, mb_mapping );
+        tot_req++;
+        int err = mb_query(query, rc, MDB_PROTO_TCP, mb_mapping);
+        if (!err && args->error_rate > 0.0) {
+          err = ((rand() % 101) <= args->error_rate) ? -1 : 0;
+        }
 
         // Sending response
-        if( err == 0 ){
-          modbus_reply( ctx_tcp, query, rc, mb_mapping );
-          log_dbg( "[%s:%d] Reply sent successfully", s_addr, cli_addr.sin_port );
-        }
+        if (!err) { err = modbus_reply( ctx_tcp, query, rc, mb_mapping ); }
+
+        if (err > 0) { log_dbg( "[%s:%d] Reply sent successfully", s_addr, cli_addr.sin_port ); }
         else{
-          log_war( "[%s:%d] Query failed. Modbus exception %d (%s)", s_addr, cli_addr, err, modbus_strerror(err) );
+          log_war( "[%s:%d] Query failed. Modbus exception %d (%s) %lu", s_addr, cli_addr.sin_port, err, modbus_strerror(err), tot_req );
           modbus_reply_exception( ctx_tcp, query, err );
         }
       }
@@ -232,7 +243,6 @@ void mbtcp_runner( struct tcp_args_t *args ){
   pthread_exit( NULL );
 }
 
-
 // ========================================
 // Modbus RTU slave
 // ========================================
@@ -248,6 +258,7 @@ void mbrtu_runner( struct rtu_args_t *args ){
 
   // Query variables
   uint8_t query[ MODBUS_RTU_MAX_ADU_LENGTH ];
+  uint64_t tot_req = 0;
 
   while( !srv_terminate ){
     // Setting up modbus rtu
@@ -294,7 +305,11 @@ void mbrtu_runner( struct rtu_args_t *args ){
         continue;
       }
 
-      int err = mb_query( query, rc, MDB_PROTO_RTU, mb_mapping );
+      tot_req++;
+      int err = mb_query(query, rc, MDB_PROTO_RTU, mb_mapping);
+      if (!err && args->error_rate > 0.0) {
+        err = ((rand()%101) <= args->error_rate) ? -1 : 0;
+      }
 
       // Sending response
       if( err == 0 ){
@@ -346,6 +361,8 @@ int mbsrv_start( struct tcp_args_t *tcp_args, struct rtu_args_t *rtu_args ){
     return -1;
   }
 
+  // Seeding the randomizer
+  srand((unsigned int) time(NULL));
 
   // Set the termination status to false
   srv_terminate = 0;
